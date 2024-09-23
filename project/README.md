@@ -26,3 +26,9 @@
 * [Vision Transformer (ViT) - Github](https://github.com/google-research/vision_transformer)
 * [Vision Transformer Tutorial](https://www.v7labs.com/blog/vision-transformer-guide)
 * [Tiny ViT - Github](https://github.com/microsoft/Cream/tree/main/TinyViT)
+
+
+## Setup:
+* Install pytorch with CUDA support. See requirements.txt
+* Download checkpoint [file](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth)
+* Download SA-B1 dataset

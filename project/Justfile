@@ -1,0 +1,12 @@
+default:
+    @just --list
+
+format:
+    @echo Running Ruff Formatter
+    @ruff format --quiet
+
+lint: format
+    @echo Running Ruff Linter
+    @ruff check --select I --fix --quiet
+    @echo Running mypy
+    @mypy .
