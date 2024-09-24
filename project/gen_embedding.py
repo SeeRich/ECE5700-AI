@@ -16,8 +16,8 @@ logging.basicConfig(
 )
 
 # Checkpoint details
-MODEL_TYPE = "vit_b"
-CHECKPOINT_PATH = "data/checkpoints/sam_vit_b_01ec64.pth"
+MODEL_TYPE = "vit_h"
+CHECKPOINT_PATH = "weights/sam_vit_h_4b8939.pth"
 
 
 # Define a custom argument type for a list of filepaths
@@ -43,7 +43,8 @@ if __name__ == "__main__":
     logging.info("Torch CUDA version: %s", torch.version.cuda)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--images", type=list_of_filepaths, required=True)
+    parser.add_argument("--images", type=list_of_filepaths)
+    parser.add_argument("--image-dir", type=pathlib.Path)
     args = parser.parse_args()
 
     torch_device = torch.device("cuda:0")
@@ -52,11 +53,22 @@ if __name__ == "__main__":
 
     predictor = SamPredictor(sam)
 
+    # Build a list of images from arguments
+    images = []
+    if args.images:
+        images.extend(args.images)
+    if args.image_dir:
+        images.extend(args.image_dir.glob("*.jpg"))
+
     # Loop over the images
-    for image_path in args.images:
+    for i, image_path in enumerate(images):
         image_bgr = cv2.imread(image_path)
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         predictor.set_image(image_rgb)
         result = predictor.get_image_embedding()
         predictor.reset_image()
-        logging.info("Result: %s", result.size())
+        # logging.info("Result: %s", result.size())
+        # Save the result to a file (new parent directory "embeddings")
+        output_path = Path("data/embeddings") / (image_path.stem + ".pth")
+        print(f"Saving to {output_path}, count: {i}")
+        torch.save(result, output_path)
