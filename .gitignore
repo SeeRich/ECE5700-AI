@@ -164,6 +164,7 @@ cython_debug/
 
 quizes/
 hw3/data/
+demo/rnn/data/
 project/data/images
 project/data/embeddings
 project/weights

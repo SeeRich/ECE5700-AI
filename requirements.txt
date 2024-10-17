@@ -5,11 +5,13 @@
 jupyterlab
 ipykernel
 ipython
+ipywidgets
 nbconvert[qtpdf]
 
 wheel
 scikit-learn
 matplotlib
+seaborn
 torch; sys_platform == 'darwin'
 torchvision; sys_platform == 'darwin'
 torchaudio; sys_platform == 'darwin'
