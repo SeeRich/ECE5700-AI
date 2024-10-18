@@ -3,5 +3,8 @@ roboflow
 supervision
 opencv-python
 rich
+pandas
+pandas-stubs
+pyarrow
 
 # https://pytorch.org/get-started/locally/

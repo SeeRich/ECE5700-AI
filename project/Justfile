@@ -7,6 +7,6 @@ format:
 
 lint: format
     @echo Running Ruff Linter
-    @ruff check --select I --fix --quiet
+    @ruff check --fix --quiet
     @echo Running mypy
     @mypy .

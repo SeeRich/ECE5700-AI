@@ -32,3 +32,10 @@
 * Install pytorch with CUDA support. See requirements.txt
 * Download checkpoint [file](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth)
 * Download SA-B1 dataset
+
+## TODO:
+* Write a script that will take a directory of images and:
+    1. Come up with ViT Tiny model (i.e. try using the one from pytorch or somewhere else already)
+    2. Generate embedding vector from image using existing Meta SAM model
+    3. Generate embedding vector from image using ViT Tiny
+    4. Measure MSE between embedding vector and feed that back to train ViT Tiny
