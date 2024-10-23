@@ -1,8 +1,15 @@
 #! /bin/bash
 
-# Convert ipynb to pdf
+#### Convert ipynb to pdf
+filename=$1
+# extension="${filename##*.}"
+filename="${filename%.*}"
+
 # HACK to remove widget state first
-jq -M 'del(.metadata.widgets)' $1 > $1.temp
-jupyter nbconvert --to html $1.temp
-jupyter nbconvert --to qtpdf $1.temp
-rm $1.temp
+jq -M 'del(.metadata.widgets)' $1 > $filename.temp
+
+# Convert to html and then pdf
+jupyter nbconvert --to html $filename.temp
+jupyter nbconvert --to pdf $filename.temp
+
+rm $filename.temp

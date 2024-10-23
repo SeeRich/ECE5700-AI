@@ -6,7 +6,7 @@ jupyterlab
 ipykernel
 ipython
 ipywidgets
-nbconvert[qtpdf]
+nbconvert[webpdf]
 
 wheel
 scikit-learn
