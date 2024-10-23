@@ -1,4 +1,5 @@
 import logging
+import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List
@@ -30,7 +31,7 @@ def collate_fn(batch: List[List[Any]] | None) -> Any:
     return batch[0]
 
 
-if __name__ == "__main__":
+def gen_teacher_embeddings() -> None:
     # Download if the file does not exist
     if not Path(CHECKPOINT_PATH).exists():
         logging.info("Downloading teacher model checkpoint from %s", CHECKPOINT_URL)
@@ -51,13 +52,10 @@ if __name__ == "__main__":
         dataset, [0.95, 0.05], generator=seed
     )
 
-    # Create multiprocessing dataloaders (must use batch_size=1 because the images are not all the same size)
+    # Create dataloaders (must use batch_size=1 because the images are not all the same size)
     # NOTE: using num_workers > 0 takes longer than using num_workers=0?
     train_loader = torch.utils.data.DataLoader(
         train_set, batch_size=1, shuffle=True, generator=seed, collate_fn=collate_fn
-    )
-    test_loader = torch.utils.data.DataLoader(
-        test_set, batch_size=1, shuffle=False, generator=seed, collate_fn=collate_fn
     )
 
     # Create embeddings data directory
@@ -86,3 +84,41 @@ if __name__ == "__main__":
         if not output_path.parent.exists():
             output_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(result, output_path)
+
+    logging.info(
+        "Finished creating embeddings: %s seconds",
+        utils.pretty_time_delta((datetime.now() - start_time).total_seconds()),
+    )
+
+
+if __name__ == "__main__":
+    # CLI arguments
+    parser = argparse.ArgumentParser(description="Train a student SAM model")
+    parser.add_argument(
+        "--gen-embeddings", action="store_true", help="Generate embeddings"
+    )
+    args = parser.parse_args()
+    print(args)
+
+    ######################## Generate embeddings ########################
+    if args.gen_embeddings:
+        gen_teacher_embeddings()
+
+    ######################## Train the student model ########################
+    logging.info("Loading SA1B student dataset")
+    dataset = sa1b_dataset.SA1BStudentDataset("data")
+    seed = torch.Generator().manual_seed(42)
+    train_set, test_set = torch.utils.data.random_split(
+        dataset, [0.95, 0.05], generator=seed
+    )
+
+    print(len(train_set), len(test_set))
+
+    # Create multiprocessing dataloaders (must use batch_size=1 because the images are not all the same size)
+    # NOTE: using num_workers > 0 takes longer than using num_workers=0?
+    # train_loader = torch.utils.data.DataLoader(
+    #     train_set, batch_size=64, shuffle=True, generator=seed, collate_fn=collate_fn
+    # )
+    # test_loader = torch.utils.data.DataLoader(
+    #     test_set, batch_size=64, shuffle=False, generator=seed, collate_fn=collate_fn
+    # )

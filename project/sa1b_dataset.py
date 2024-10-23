@@ -1,5 +1,6 @@
 # Custom PyTorch Dataset class for subset of SA1B dataset
 import os
+import logging
 import shutil
 import tarfile
 from pathlib import Path
@@ -30,7 +31,7 @@ class SA1BDataset(Dataset[T]):
         self.download = download
         self.num_samples = num_samples
 
-        # Dataframe stores three integer columns: directory, image, mask
+        # Dataframe stores two string columns: directory, filename
         self.data = pd.DataFrame(columns=["directory", "filename"])
 
         cache_fp = self.root_dir / "cache.parquet"
@@ -40,7 +41,7 @@ class SA1BDataset(Dataset[T]):
         # If not, move on to download the dataset
         if cache_fp.exists():
             self.data = pd.read_parquet(cache_fp)
-            print(f"Loaded cached data, num samples: {len(self.data)}")
+            logging.info(f"Loaded cached data, num samples: {len(self.data)}")
             return
 
         if download:
@@ -121,10 +122,77 @@ class SA1BDataset(Dataset[T]):
 
         # Untar the file and delete the tar file
         image_dir = archive_fp.parent / archive_fp.stem
-        print(f"Extracting images from {archive_fp} to directory {image_dir}")
+        logging.info(f"Extracting images from {archive_fp} to directory {image_dir}")
         # Remove this image_dir if it already exists
         if image_dir.exists():
             shutil.rmtree(image_dir)
         with tarfile.open(archive_fp) as tar:
             tar.extractall(path=image_dir)
         return image_dir
+
+
+class SA1BStudentDataset(Dataset[T]):
+    """SA1B student dataset. This includes the images and the teacher's embeddings."""
+
+    def __init__(self, root_dir: str):
+        """
+        Arguments:
+        root_dir (str): Directory to store the dataset
+        """
+        self.root_dir = Path(root_dir)
+        self.embeddings_dir = self.root_dir / "embeddings"
+
+        # Dataframe stores three string columns:
+        # directory, image (filename), embedding (boolean)
+        self.data = pd.DataFrame(columns=["directory", "image", "embedding"])
+
+        # Cached data file for original image only dataset
+        # This must exist to load the dataset
+        cache_fp = self.root_dir / "cache.parquet"
+        if not cache_fp.exists():
+            raise ValueError("Cached data file does not exist")
+
+        # Load the original dataset, for each image, get the embedding
+        # Log a warning if the embedding does not exist
+        orig_data = pd.read_parquet(cache_fp)
+        has_embeddings: list[bool] = []
+        for _, row in orig_data.iterrows():
+            directory = row["directory"]
+            image = row["filename"]
+            embedding_fp = self.embeddings_dir / directory / f"{image}.pth"
+            has_embeddings.append(embedding_fp.exists())
+        orig_data["embedding"] = has_embeddings
+
+        # Log a warning if the not all embeddings exist, and the number missing
+        # Get the number of missing embeddings
+        num_missing_embeddings = orig_data["embedding"].value_counts().get(False, 0)
+        if num_missing_embeddings > 0:
+            logging.warning(
+                "Missing %d embeddings",
+                num_missing_embeddings,
+            )
+
+        # Filter out rows where embedding is False
+        self.data = orig_data[orig_data["embedding"]]
+
+    def __len__(self) -> int:
+        if self.data is None:
+            raise ValueError("Dataset not loaded")
+        return len(self.data)
+
+    def __getitem__(self, idx: int) -> T:
+        directory = self.data.iloc[idx]["directory"]
+        filename = self.data.iloc[idx]["filename"]
+        image_fp = self.root_dir / directory / f"{filename}.jpg"
+        image_bgr = cv2.imread(image_fp)
+        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        sample = {"image": image_rgb, "directory": directory, "filename": filename}
+        return sample
+
+    def __image_path_to_dir_and_file(self, image_path: Path) -> Tuple[str, str]:
+        # File path is like: "directory/blah/blah/data/train/sa_000023/sa_002340.jpg"
+        # Get the directory name
+        directory = image_path.parent.name
+        # Get the file name
+        file_name = image_path.stem
+        return directory, file_name
