@@ -35,6 +35,12 @@ class SA1BDataset(Dataset[T]):
         self.download = download
         self.num_samples = num_samples
 
+        # Get this file folder directory
+        self.file_path = Path(os.path.dirname(__file__))
+        # Links filepath
+        self.sam_links = self.file_path / "sam-links.txt"
+        self.embeddings_dir = self.root_dir / "embeddings"
+
         # Dataframe stores two string columns: directory, filename
         self.data = pd.DataFrame(columns=["directory", "filename"])
 
@@ -45,23 +51,41 @@ class SA1BDataset(Dataset[T]):
         # If not, move on to download the dataset
         if cache_fp.exists():
             self.data = pd.read_parquet(cache_fp)
-            logging.info(f"Loaded cached data, num samples: {len(self.data)}")
-            return
+            logging.debug(f"Loaded cached data, num samples: {len(self.data)}")
 
-        if download:
+            # If we do have a cache file, load any embeddings present as well.
+            # This helps work around training that was interrupted.
+            has_embeddings: list[bool] = []
+            for _, row in self.data.iterrows():
+                directory = row["directory"]
+                image = row["filename"]
+                embedding_fp = self.embeddings_dir / directory / f"{image}.pth"
+                has_embeddings.append(embedding_fp.exists())
+            self.data["embedding"] = has_embeddings
+            num_missing_embeddings = self.data["embedding"].value_counts().get(False, 0)
+            if num_missing_embeddings > 0:
+                logging.warning(
+                    "Missing %d embeddings",
+                    num_missing_embeddings,
+                )
+
+
+        if download and not cache_fp.exists():
             # Load sam-links.txt as DataFrame, file is text file with tab-separated values of filename, url
-            links = pd.read_csv("sam-links.txt", sep="\t", header=0)
-            # TEMPORARY trim to first 4 rows
-            links = links.iloc[:2]
-            # Remove existing files in the directory
-            if self.root_dir.exists():
-                shutil.rmtree(self.root_dir)
+            links = pd.read_csv(self.sam_links, sep="\t", header=0)
             # Create the directory if it doesn't exist
             self.root_dir.mkdir(parents=True, exist_ok=True)
             # Process the links and download the data
             self.__process_links(self.root_dir, links, num_samples)
             # Cache data frame to disk so we don't have to download it again
             self.data.to_parquet(cache_fp)
+
+        # Filter the list by the number of desired samples
+        if len(self.data) < num_samples:
+            raise ValueError("Not enough samples to meet request")
+        self.data = self.data.sample(num_samples, random_state=42)
+        logging.debug(f"Loaded data, num samples: {len(self.data)}")
+
 
     def __len__(self) -> int:
         if self.data is None:
@@ -192,7 +216,6 @@ class SA1BStudentDataset(Dataset[T]):
             raise ValueError("Cached data file does not exist")
 
         # Load the original dataset, for each image, get the embedding
-        # Log a warning if the embedding does not exist
         orig_data = pd.read_parquet(cache_fp)
         has_embeddings: list[bool] = []
         for _, row in orig_data.iterrows():

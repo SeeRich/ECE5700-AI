@@ -13,6 +13,8 @@ import sa1b_dataset
 import utils
 from mobile_sam_image_encoder import SamImageEncoder
 
+# python src/train.py --gen-embeddings --num-samples 220000 2>&1 | tee -a train.log
+
 # Basic configuration for logging
 logging.basicConfig(
     level=logging.DEBUG,  # Set the logging level
@@ -70,6 +72,9 @@ def gen_teacher_embeddings(num_samples: int) -> None:
     # Create embeddings using the teacher model
     logging.info("Creating embeddings using teacher model (this may take a while)")
     for i, data in enumerate(train_loader):
+        if "embedding" in data and data["embedding"] is True:
+            logging.debug("Skipping")
+            continue
         if i % 100 == 0:
             now = datetime.now()
             duration_str = utils.pretty_time_delta((now - start_time).total_seconds())
