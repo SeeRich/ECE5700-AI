@@ -6,11 +6,15 @@ import tarfile
 from pathlib import Path
 from typing import Tuple
 
+import torch
 import cv2
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 from torch.utils.data import Dataset
+import torch.nn.functional as F
+
+from segment_anything.utils.transforms import ResizeLongestSide
 
 import utils
 
@@ -131,16 +135,51 @@ class SA1BDataset(Dataset[T]):
         return image_dir
 
 
+class SA1BImagePreprocessor:
+    def __init__(self, img_size: int, device: torch.device):
+        self.img_size = img_size
+        self.device = device
+        self.transform = ResizeLongestSide(img_size)
+        self.pixel_mean = (
+            torch.Tensor([123.675, 116.28, 103.53]).view(-1, 1, 1).to(device)
+        )
+        self.pixel_std = torch.Tensor([58.395, 57.12, 57.375]).view(-1, 1, 1).to(device)
+
+    def preprocess(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize pixel values and pad to a square input."""
+        # Do transform
+        x = self.transform.apply_image(x)
+        # Convert to tensor
+        xt = torch.as_tensor(x, device=self.device)
+        # Permute to NCHW
+        xt = xt.permute(2, 0, 1).contiguous()[None, :, :, :]
+
+        # Normalize colors
+        xt = (xt - self.pixel_mean) / self.pixel_std
+
+        # Pad
+        h, w = xt.shape[-2:]
+        padh = self.img_size - h
+        padw = self.img_size - w
+        xt = F.pad(xt, (0, padw, 0, padh))
+        return xt
+
+
 class SA1BStudentDataset(Dataset[T]):
     """SA1B student dataset. This includes the images and the teacher's embeddings."""
 
-    def __init__(self, root_dir: str):
+    def __init__(self, img_size: int, device: torch.device, root_dir: str):
         """
         Arguments:
         root_dir (str): Directory to store the dataset
         """
         self.root_dir = Path(root_dir)
         self.embeddings_dir = self.root_dir / "embeddings"
+
+        self.device = device
+
+        # Setup preprocessing
+        self.preprocessor = SA1BImagePreprocessor(img_size, device)
 
         # Dataframe stores three string columns:
         # directory, image (filename), embedding (boolean)
@@ -181,18 +220,18 @@ class SA1BStudentDataset(Dataset[T]):
         return len(self.data)
 
     def __getitem__(self, idx: int) -> T:
+        """Returns a dictionary of teacher embeddings and the image"""
         directory = self.data.iloc[idx]["directory"]
         filename = self.data.iloc[idx]["filename"]
         image_fp = self.root_dir / directory / f"{filename}.jpg"
+        embedding_fp = self.embeddings_dir / directory / f"{filename}.pth"
+        embedding = torch.load(embedding_fp, weights_only=True)
         image_bgr = cv2.imread(image_fp)
+        # Model expects RGB
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        sample = {"image": image_rgb, "directory": directory, "filename": filename}
-        return sample
-
-    def __image_path_to_dir_and_file(self, image_path: Path) -> Tuple[str, str]:
-        # File path is like: "directory/blah/blah/data/train/sa_000023/sa_002340.jpg"
-        # Get the directory name
-        directory = image_path.parent.name
-        # Get the file name
-        file_name = image_path.stem
-        return directory, file_name
+        # Preprocess image
+        image = self.preprocessor.preprocess(image_rgb)
+        # Remove the first dimension
+        image = image.squeeze(0)
+        embedding = embedding.squeeze(0)
+        return (image, embedding)

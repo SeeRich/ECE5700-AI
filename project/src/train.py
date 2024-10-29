@@ -5,12 +5,13 @@ from pathlib import Path
 from typing import Any, List
 
 import torch
-import torch.nn
+import torch.nn as nn
 import torch.utils.data
 from segment_anything import SamPredictor, sam_model_registry
 
 import sa1b_dataset
 import utils
+from mobile_sam_image_encoder import SamImageEncoder
 
 # Basic configuration for logging
 logging.basicConfig(
@@ -31,7 +32,7 @@ def collate_fn(batch: List[List[Any]] | None) -> Any:
     return batch[0]
 
 
-def gen_teacher_embeddings() -> None:
+def gen_teacher_embeddings(num_samples: int) -> None:
     # Download if the file does not exist
     if not Path(CHECKPOINT_PATH).exists():
         logging.info("Downloading teacher model checkpoint from %s", CHECKPOINT_URL)
@@ -46,7 +47,7 @@ def gen_teacher_embeddings() -> None:
     # Load 10% of the 11M samples in the dataset
     # NOTE: if you change the number of samples, you will need to re-download the dataset from scratch
     logging.info("Loading SA1B dataset")
-    dataset = sa1b_dataset.SA1BDataset("data", download=True, num_samples=int(6e3))
+    dataset = sa1b_dataset.SA1BDataset("data", download=True, num_samples=num_samples)
     seed = torch.Generator().manual_seed(42)
     train_set, test_set = torch.utils.data.random_split(
         dataset, [0.95, 0.05], generator=seed
@@ -91,34 +92,128 @@ def gen_teacher_embeddings() -> None:
     )
 
 
+def train(
+    model: nn.Module,
+    criterion: nn.modules.loss._Loss,
+    optimizer: torch.optim.Optimizer,
+    data_loader: torch.utils.data.DataLoader,
+    epoch: int,
+    device: torch.device,
+) -> List[float]:
+    """Train function for the student model (single epoch)."""
+    # Set model to training mode
+    model.train()
+
+    train_loss = []
+
+    for batch_idx, (images, targets) in enumerate(data_loader):
+        # move the data to the device
+        images, targets = images.to(device), targets.to(device)
+        # Model forward evaluation
+        output = model(images)
+        # Calculate loss
+        loss = criterion(output, targets)
+        # Loss backward propagation
+        loss.backward()
+        # Gradient evaluation and backward propagation
+        optimizer.step()
+
+        train_loss.append(
+            loss.item()
+        )  # item() is to get the value of the tensor directly
+        if batch_idx % 10 == 0:  # We log our output every 100 batches
+            print(
+                f"Epoch {epoch}: [{batch_idx*len(images)}/{len(data_loader.dataset)}] Loss: {loss.item()}"
+            )
+    # ----------- <End Your code> ---------------
+    assert len(train_loss) == len(train_loader)
+    return train_loss
+
+
+def test(
+    model: nn.Module,
+    loss_fn: nn.modules.loss._Loss,
+    data_loader: torch.utils.data.DataLoader,
+    epoch: int,
+    device: torch.device,
+) -> None:
+    # Set the model to evaluation mode (i.e. not training)
+    model.eval()
+
+    test_loss = 0
+
+    with torch.no_grad():
+        for images, targets in data_loader:
+            # Move the data to the device
+            images, targets = images.to(device), targets.to(device)
+            # Evaluate the model on the batch
+            output = model(images)
+            # Sum up batch loss
+            test_loss += loss_fn(output, targets).item() * images.size(0)
+
+    # Number of total test samples
+    total_num = len(data_loader.dataset)
+    test_loss /= total_num
+
+    print(
+        f"Test result on epoch {epoch}: total samples: {total_num}, Loss: {test_loss:.3f}"
+    )
+
+
 if __name__ == "__main__":
     # CLI arguments
     parser = argparse.ArgumentParser(description="Train a student SAM model")
     parser.add_argument(
         "--gen-embeddings", action="store_true", help="Generate embeddings"
     )
+    parser.add_argument(
+        "--num-samples", type=int, default=300, help="Number of samples"
+    )
     args = parser.parse_args()
-    print(args)
 
     ######################## Generate embeddings ########################
     if args.gen_embeddings:
-        gen_teacher_embeddings()
+        gen_teacher_embeddings(num_samples=args.num_samples)
 
     ######################## Train the student model ########################
+    # Create the student model
+    logging.info("Creating student model")
+    sam_image_encoder = SamImageEncoder()
+    sam_image_encoder.to(device=utils.get_device())
+
     logging.info("Loading SA1B student dataset")
-    dataset = sa1b_dataset.SA1BStudentDataset("data")
+    dataset = sa1b_dataset.SA1BStudentDataset(
+        sam_image_encoder.get_image_size(), utils.get_device(), "data"
+    )
     seed = torch.Generator().manual_seed(42)
     train_set, test_set = torch.utils.data.random_split(
         dataset, [0.95, 0.05], generator=seed
     )
 
-    print(len(train_set), len(test_set))
+    # Create data loaders for training and testing
+    train_loader = torch.utils.data.DataLoader(
+        train_set, batch_size=8, shuffle=True, generator=seed
+    )
+    test_loader = torch.utils.data.DataLoader(test_set, batch_size=8, shuffle=False)
 
-    # Create multiprocessing dataloaders (must use batch_size=1 because the images are not all the same size)
-    # NOTE: using num_workers > 0 takes longer than using num_workers=0?
-    # train_loader = torch.utils.data.DataLoader(
-    #     train_set, batch_size=64, shuffle=True, generator=seed, collate_fn=collate_fn
-    # )
-    # test_loader = torch.utils.data.DataLoader(
-    #     test_set, batch_size=64, shuffle=False, generator=seed, collate_fn=collate_fn
-    # )
+    logging.info(
+        "Training student model with %s training samples, %s test samples",
+        len(train_set),
+        len(test_set),
+    )
+
+    # Train the student model for 4 epochs
+    for epoch in range(4):
+        train(
+            model=sam_image_encoder,
+            criterion=nn.MSELoss(),
+            optimizer=torch.optim.Adam(sam_image_encoder.parameters(), lr=0.001),
+            data_loader=train_loader,
+            epoch=epoch,
+            device=utils.get_device(),
+        )
+
+    # Save the student model checkpoint
+    checkpoint_path = "data/weights/student_model.pth"
+    logging.info("Saving student model checkpoint to %s", checkpoint_path)
+    torch.save(sam_image_encoder.state_dict(), checkpoint_path)

@@ -5,8 +5,12 @@ format:
     @echo Running Ruff Formatter
     @ruff format --quiet
 
+bundle:
+    @echo Bundling source code
+    @tar -czf src.tar.gz src
+
 lint: format
     @echo Running Ruff Linter
     @ruff check --fix --quiet
     @echo Running mypy
-    @mypy .
+    @mypy src 
