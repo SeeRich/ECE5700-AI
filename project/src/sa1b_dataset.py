@@ -18,6 +18,8 @@ from segment_anything.utils.transforms import ResizeLongestSide
 
 import utils
 
+logger = logging.getLogger(__name__)
+
 T = dict[str, NDArray[np.uint8]]
 
 
@@ -51,7 +53,7 @@ class SA1BDataset(Dataset[T]):
         # If not, move on to download the dataset
         if cache_fp.exists():
             self.data = pd.read_parquet(cache_fp)
-            logging.debug(f"Loaded cached data, num samples: {len(self.data)}")
+            logger.debug(f"Loaded cached data, num samples: {len(self.data)}")
 
             # If we do have a cache file, load any embeddings present as well.
             # This helps work around training that was interrupted.
@@ -64,13 +66,15 @@ class SA1BDataset(Dataset[T]):
             self.data["embedding"] = has_embeddings
             num_missing_embeddings = self.data["embedding"].value_counts().get(False, 0)
             if num_missing_embeddings > 0:
-                logging.warning(
+                logger.warning(
                     "Missing %d embeddings",
                     num_missing_embeddings,
                 )
-
+        else:
+            self.__load_existing_data()
 
         if download and not cache_fp.exists():
+            logger.info("Downloading SA1B Dataset")
             # Load sam-links.txt as DataFrame, file is text file with tab-separated values of filename, url
             links = pd.read_csv(self.sam_links, sep="\t", header=0)
             # Create the directory if it doesn't exist
@@ -83,9 +87,8 @@ class SA1BDataset(Dataset[T]):
         # Filter the list by the number of desired samples
         if len(self.data) < num_samples:
             raise ValueError("Not enough samples to meet request")
-        self.data = self.data.sample(num_samples, random_state=42)
-        logging.debug(f"Loaded data, num samples: {len(self.data)}")
-
+        # self.data = self.data.sample(num_samples, random_state=42)
+        logger.debug(f"Loaded data, num samples: {len(self.data)}")
 
     def __len__(self) -> int:
         if self.data is None:
@@ -95,10 +98,16 @@ class SA1BDataset(Dataset[T]):
     def __getitem__(self, idx: int) -> T:
         directory = self.data.iloc[idx]["directory"]
         filename = self.data.iloc[idx]["filename"]
+        has_embedding = self.data.iloc[idx]["embedding"]
         image_fp = self.root_dir / directory / f"{filename}.jpg"
         image_bgr = cv2.imread(image_fp)
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        sample = {"image": image_rgb, "directory": directory, "filename": filename}
+        sample = {
+            "image": image_rgb,
+            "directory": directory,
+            "filename": filename,
+            "embedding": has_embedding,
+        }
         return sample
 
     def __image_path_to_dir_and_file(self, image_path: Path) -> Tuple[str, str]:
@@ -109,6 +118,31 @@ class SA1BDataset(Dataset[T]):
         file_name = image_path.stem
         return directory, file_name
 
+    def __load_existing_data(self) -> None:
+        # Get a list of all the files in the directory
+        data_dirs = list(self.root_dir.glob("sa_*"))
+        files = []
+        for dir in data_dirs:
+            files.extend(list([f for f in list(dir.glob("sa_*"))]))
+        # Get a list of all the images
+        images = [f for f in files if f.name.endswith(".jpg")]
+
+        # Process into directory and filenames
+        directories = []
+        filenames = []
+        for img_fp in images:
+            dir, filename = self.__image_path_to_dir_and_file(img_fp)
+            directories.append(dir)
+            filenames.append(filename)
+
+        # Create a dataframe to concatenate
+        self.data = pd.concat(
+            [
+                self.data,
+                pd.DataFrame({"directory": directories, "filename": filenames}),
+            ]
+        )
+
     def __process_links(
         self, data_dir: Path, links: pd.DataFrame, num_samples: int
     ) -> None:
@@ -117,9 +151,17 @@ class SA1BDataset(Dataset[T]):
             # Break if we have enough samples
             if len(self.data) >= num_samples:
                 break
-            url = link["cdn_link"]
-            filename = link["file_name"]
+
+            url: str = link["cdn_link"]
+            filename: str = link["file_name"]
             output_fp = data_dir / filename
+            # Only do the download + untar if the directory doesn't exist
+            untared_dir = output_fp.parent / output_fp.stem
+            if untared_dir.exists():
+                continue
+            logger.debug(
+                "Continuing download: %s / %s samples", len(self.data), num_samples
+            )
             image_dir = self.__download_and_untar(url, output_fp)
             # Remove the tar file
             os.remove(output_fp)
@@ -150,7 +192,7 @@ class SA1BDataset(Dataset[T]):
 
         # Untar the file and delete the tar file
         image_dir = archive_fp.parent / archive_fp.stem
-        logging.info(f"Extracting images from {archive_fp} to directory {image_dir}")
+        logger.info(f"Extracting images from {archive_fp} to directory {image_dir}")
         # Remove this image_dir if it already exists
         if image_dir.exists():
             shutil.rmtree(image_dir)
@@ -192,7 +234,13 @@ class SA1BImagePreprocessor:
 class SA1BStudentDataset(Dataset[T]):
     """SA1B student dataset. This includes the images and the teacher's embeddings."""
 
-    def __init__(self, img_size: int, device: torch.device, root_dir: str):
+    def __init__(
+        self,
+        img_size: int,
+        device: torch.device,
+        root_dir: str,
+        num_samples: int | None = None,
+    ):
         """
         Arguments:
         root_dir (str): Directory to store the dataset
@@ -229,13 +277,17 @@ class SA1BStudentDataset(Dataset[T]):
         # Get the number of missing embeddings
         num_missing_embeddings = orig_data["embedding"].value_counts().get(False, 0)
         if num_missing_embeddings > 0:
-            logging.warning(
+            logger.warning(
                 "Missing %d embeddings",
                 num_missing_embeddings,
             )
 
         # Filter out rows where embedding is False
         self.data = orig_data[orig_data["embedding"]]
+
+        # reduce size if requested
+        if num_samples is not None:
+            self.data = self.data.sample(num_samples)
 
     def __len__(self) -> int:
         if self.data is None:

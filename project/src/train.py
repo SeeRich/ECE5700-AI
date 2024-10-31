@@ -13,18 +13,41 @@ import sa1b_dataset
 import utils
 from mobile_sam_image_encoder import SamImageEncoder
 
-# python src/train.py --gen-embeddings --num-samples 220000 2>&1 | tee -a train.log
-
-# Basic configuration for logging
-logging.basicConfig(
-    level=logging.DEBUG,  # Set the logging level
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+# python src/train.py --gen-embeddings --num-samples 220000
 
 # Teacher model pretrained weight data
 MODEL_TYPE = "vit_h"
 CHECKPOINT_PATH = "data/weights/sam_vit_h_4b8939.pth"
 CHECKPOINT_URL = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
+
+logger = logging.getLogger(__name__)
+
+
+def setup_logging() -> logging.Logger:
+    # Create a logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    # Create a formatter
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
+    # Create a file handler
+    file_handler = logging.FileHandler("train.log")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+
+    # Create a console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(formatter)
+
+    # Add the handlers to the logger
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    return logger
 
 
 def collate_fn(batch: List[List[Any]] | None) -> Any:
@@ -37,28 +60,19 @@ def collate_fn(batch: List[List[Any]] | None) -> Any:
 def gen_teacher_embeddings(num_samples: int) -> None:
     # Download if the file does not exist
     if not Path(CHECKPOINT_PATH).exists():
-        logging.info("Downloading teacher model checkpoint from %s", CHECKPOINT_URL)
+        logger.info("Downloading teacher model checkpoint from %s", CHECKPOINT_URL)
         utils.download_file(CHECKPOINT_URL, Path(CHECKPOINT_PATH))
-
-    # Create predictor
-    logging.info("Creating teacher SAM model: %s", MODEL_TYPE)
-    sam = sam_model_registry[MODEL_TYPE](checkpoint=CHECKPOINT_PATH)
-    sam.to(utils.get_device())
-    predictor = SamPredictor(sam)
 
     # Load 10% of the 11M samples in the dataset
     # NOTE: if you change the number of samples, you will need to re-download the dataset from scratch
-    logging.info("Loading SA1B dataset")
+    logger.info("Loading SA1B dataset")
     dataset = sa1b_dataset.SA1BDataset("data", download=True, num_samples=num_samples)
     seed = torch.Generator().manual_seed(42)
-    train_set, test_set = torch.utils.data.random_split(
-        dataset, [0.95, 0.05], generator=seed
-    )
 
     # Create dataloaders (must use batch_size=1 because the images are not all the same size)
     # NOTE: using num_workers > 0 takes longer than using num_workers=0?
     train_loader = torch.utils.data.DataLoader(
-        train_set, batch_size=1, shuffle=True, generator=seed, collate_fn=collate_fn
+        dataset, batch_size=1, shuffle=True, generator=seed, collate_fn=collate_fn
     )
 
     # Create embeddings data directory
@@ -69,16 +83,22 @@ def gen_teacher_embeddings(num_samples: int) -> None:
     # Keep track of duration
     start_time = datetime.now()
 
+    # Create predictor
+    logger.info("Creating teacher SAM model: %s", MODEL_TYPE)
+    sam = sam_model_registry[MODEL_TYPE](checkpoint=CHECKPOINT_PATH)
+    sam.to(utils.get_device())
+    predictor = SamPredictor(sam)
+
     # Create embeddings using the teacher model
-    logging.info("Creating embeddings using teacher model (this may take a while)")
+    logger.info("Creating embeddings using teacher model (this may take a while)")
     for i, data in enumerate(train_loader):
-        if "embedding" in data and data["embedding"] is True:
-            logging.debug("Skipping")
-            continue
         if i % 100 == 0:
             now = datetime.now()
             duration_str = utils.pretty_time_delta((now - start_time).total_seconds())
-            logging.info("Processed %d samples, duration: %s seconds", i, duration_str)
+            logger.info("Processed %d samples, duration: %s seconds", i, duration_str)
+        if "embedding" in data and data["embedding"]:
+            # logger.debug("Skipping")
+            continue
         image_name = data["filename"]
         image_dir = data["directory"]
         image = data["image"]
@@ -91,7 +111,7 @@ def gen_teacher_embeddings(num_samples: int) -> None:
             output_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(result, output_path)
 
-    logging.info(
+    logger.info(
         "Finished creating embeddings: %s seconds",
         utils.pretty_time_delta((datetime.now() - start_time).total_seconds()),
     )
@@ -103,6 +123,7 @@ def train(
     optimizer: torch.optim.Optimizer,
     data_loader: torch.utils.data.DataLoader,
     epoch: int,
+    start_time: datetime,
     device: torch.device,
 ) -> List[float]:
     """Train function for the student model (single epoch)."""
@@ -127,8 +148,10 @@ def train(
             loss.item()
         )  # item() is to get the value of the tensor directly
         if batch_idx % 10 == 0:  # We log our output every 100 batches
-            print(
-                f"Epoch {epoch}: [{batch_idx*len(images)}/{len(data_loader.dataset)}] Loss: {loss.item()}"
+            now = datetime.now()
+            duration_str = utils.pretty_time_delta((now - start_time).total_seconds())
+            logger.info(
+                f"Epoch {epoch}: [{batch_idx*len(images)}/{len(data_loader.dataset)}], Loss: {loss.item()}, Duration: {duration_str}"
             )
     # ----------- <End Your code> ---------------
     assert len(train_loss) == len(train_loader)
@@ -137,7 +160,7 @@ def train(
 
 def test(
     model: nn.Module,
-    loss_fn: nn.modules.loss._Loss,
+    criterion: nn.modules.loss._Loss,
     data_loader: torch.utils.data.DataLoader,
     epoch: int,
     device: torch.device,
@@ -154,7 +177,7 @@ def test(
             # Evaluate the model on the batch
             output = model(images)
             # Sum up batch loss
-            test_loss += loss_fn(output, targets).item() * images.size(0)
+            test_loss += criterion(output, targets).item() * images.size(0)
 
     # Number of total test samples
     total_num = len(data_loader.dataset)
@@ -166,6 +189,8 @@ def test(
 
 
 if __name__ == "__main__":
+    logger = setup_logging()
+
     # CLI arguments
     parser = argparse.ArgumentParser(description="Train a student SAM model")
     parser.add_argument(
@@ -182,11 +207,11 @@ if __name__ == "__main__":
 
     ######################## Train the student model ########################
     # Create the student model
-    logging.info("Creating student model")
+    logger.info("Creating student model")
     sam_image_encoder = SamImageEncoder()
     sam_image_encoder.to(device=utils.get_device())
 
-    logging.info("Loading SA1B student dataset")
+    logger.info("Loading SA1B student dataset")
     dataset = sa1b_dataset.SA1BStudentDataset(
         sam_image_encoder.get_image_size(), utils.get_device(), "data"
     )
@@ -201,24 +226,37 @@ if __name__ == "__main__":
     )
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=8, shuffle=False)
 
-    logging.info(
-        "Training student model with %s training samples, %s test samples",
-        len(train_set),
-        len(test_set),
+    num_train = len(train_set)
+    num_test = len(test_set)
+    logger.info(
+        "Training student model with %s training samples, %s test samples, %s total samples",
+        num_train,
+        num_test,
+        num_train + num_test,
     )
 
-    # Train the student model for 4 epochs
-    for epoch in range(4):
+    # Train the student model for n_epochs
+    n_epochs = 2
+    start_time = datetime.now()
+    for epoch in range(n_epochs):
         train(
             model=sam_image_encoder,
             criterion=nn.MSELoss(),
             optimizer=torch.optim.Adam(sam_image_encoder.parameters(), lr=0.001),
             data_loader=train_loader,
             epoch=epoch,
+            start_time=start_time,
+            device=utils.get_device(),
+        )
+        test(
+            model=sam_image_encoder,
+            criterion=nn.MSELoss(),
+            data_loader=test_loader,
+            epoch=epoch,
             device=utils.get_device(),
         )
 
     # Save the student model checkpoint
     checkpoint_path = "data/weights/student_model.pth"
-    logging.info("Saving student model checkpoint to %s", checkpoint_path)
+    logger.info("Saving student model checkpoint to %s", checkpoint_path)
     torch.save(sam_image_encoder.state_dict(), checkpoint_path)
