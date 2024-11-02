@@ -236,13 +236,15 @@ if __name__ == "__main__":
     )
 
     # Train the student model for n_epochs
-    n_epochs = 2
+    n_epochs = 4
     start_time = datetime.now()
+    optimizer = torch.optim.Adam(sam_image_encoder.parameters())
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
     for epoch in range(n_epochs):
         train(
             model=sam_image_encoder,
             criterion=nn.MSELoss(),
-            optimizer=torch.optim.Adam(sam_image_encoder.parameters(), lr=0.001),
+            optimizer=optimizer,
             data_loader=train_loader,
             epoch=epoch,
             start_time=start_time,
@@ -255,8 +257,9 @@ if __name__ == "__main__":
             epoch=epoch,
             device=utils.get_device(),
         )
+        scheduler.step()
 
-    # Save the student model checkpoint
-    checkpoint_path = "data/weights/student_model.pth"
-    logger.info("Saving student model checkpoint to %s", checkpoint_path)
-    torch.save(sam_image_encoder.state_dict(), checkpoint_path)
+        # Save the student model checkpoint (just do this each epoch)
+        checkpoint_path = f"data/weights/student_model_epoch_{epoch}.pth"
+        logger.info("Saving student model checkpoint to %s", checkpoint_path)
+        torch.save(sam_image_encoder.state_dict(), checkpoint_path)
