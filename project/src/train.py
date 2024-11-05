@@ -20,7 +20,7 @@ MODEL_TYPE = "vit_h"
 CHECKPOINT_PATH = "data/weights/sam_vit_h_4b8939.pth"
 CHECKPOINT_URL = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ece570.train")
 
 
 def setup_logging() -> logging.Logger:

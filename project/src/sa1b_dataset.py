@@ -18,13 +18,13 @@ from segment_anything.utils.transforms import ResizeLongestSide
 
 import utils
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ece570.sa1b_dataset")
 
 T = dict[str, NDArray[np.uint8]]
 
 
 class SA1BDataset(Dataset[T]):
-    """SA1B dataset."""
+    """SA1B dataset includes images and embeddings (if available)."""
 
     def __init__(self, root_dir: str, download: bool, num_samples: int):
         """
@@ -215,6 +215,7 @@ class SA1BImagePreprocessor:
         """Normalize pixel values and pad to a square input."""
         # Do transform
         x = self.transform.apply_image(x)
+        print("x: ", x)
         # Convert to tensor
         xt = torch.as_tensor(x, device=self.device)
         # Permute to NCHW
@@ -310,3 +311,179 @@ class SA1BStudentDataset(Dataset[T]):
         image = image.squeeze(0)
         embedding = embedding.squeeze(0)
         return (image, embedding)
+
+
+class SA1BMIODataset(Dataset[T]):
+    def __init__(self, root_dir: str, download: bool, num_samples: int):
+        """
+        Arguments:
+        root_dir (str): Directory to store the dataset
+        download (bool): Whether to download the dataset
+        num_samples (int): Number of samples to download
+        """
+        self.root_dir = Path(root_dir)
+        self.download = download
+        self.num_samples = num_samples
+
+        # Get this file folder directory
+        self.file_path = Path(os.path.dirname(__file__))
+        # Links filepath
+        self.sam_links = self.file_path / "sam-links.txt"
+        self.embeddings_dir = self.root_dir / "embeddings"
+
+        # Dataframe stores two string columns: directory, filename
+        self.data = pd.DataFrame(columns=["directory", "filename"])
+
+        cache_fp = self.root_dir / "cache.parquet"
+
+        # Verify that the dataset is downloaded and ready to use
+        # Check for the existence of the cache file
+        # If not, move on to download the dataset
+        if cache_fp.exists():
+            self.data = pd.read_parquet(cache_fp)
+            logger.debug(f"Loaded cached data, num samples: {len(self.data)}")
+
+            # If we do have a cache file, load any embeddings present as well.
+            # This helps work around training that was interrupted.
+            has_embeddings: list[bool] = []
+            for _, row in self.data.iterrows():
+                directory = row["directory"]
+                image = row["filename"]
+                embedding_fp = self.embeddings_dir / directory / f"{image}.pth"
+                has_embeddings.append(embedding_fp.exists())
+            self.data["embedding"] = has_embeddings
+            num_missing_embeddings = self.data["embedding"].value_counts().get(False, 0)
+            if num_missing_embeddings > 0:
+                logger.warning(
+                    "Missing %d embeddings",
+                    num_missing_embeddings,
+                )
+        else:
+            self.__load_existing_data()
+
+        if download and not cache_fp.exists():
+            logger.info("Downloading SA1B Dataset")
+            # Load sam-links.txt as DataFrame, file is text file with tab-separated values of filename, url
+            links = pd.read_csv(self.sam_links, sep="\t", header=0)
+            # Create the directory if it doesn't exist
+            self.root_dir.mkdir(parents=True, exist_ok=True)
+            # Process the links and download the data
+            self.__process_links(self.root_dir, links, num_samples)
+            # Cache data frame to disk so we don't have to download it again
+            self.data.to_parquet(cache_fp)
+
+        # Filter the list by the number of desired samples
+        if len(self.data) < num_samples:
+            raise ValueError("Not enough samples to meet request")
+        # self.data = self.data.sample(num_samples, random_state=42)
+        logger.debug(f"Loaded data, num samples: {len(self.data)}")
+
+    def __len__(self) -> int:
+        if self.data is None:
+            raise ValueError("Dataset not loaded")
+        return len(self.data)
+
+    def __getitem__(self, idx: int) -> T:
+        directory = self.data.iloc[idx]["directory"]
+        filename = self.data.iloc[idx]["filename"]
+        has_embedding = self.data.iloc[idx]["embedding"]
+        image_fp = self.root_dir / directory / f"{filename}.jpg"
+        image_bgr = cv2.imread(image_fp)
+        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        sample = {
+            "image": image_rgb,
+            "directory": directory,
+            "filename": filename,
+            "embedding": has_embedding,
+        }
+        return sample
+
+    def __image_path_to_dir_and_file(self, image_path: Path) -> Tuple[str, str]:
+        # File path is like: "directory/blah/blah/data/train/sa_000023/sa_002340.jpg"
+        # Get the directory name
+        directory = image_path.parent.name
+        # Get the file name
+        file_name = image_path.stem
+        return directory, file_name
+
+    def __load_existing_data(self) -> None:
+        # Get a list of all the files in the directory
+        data_dirs = list(self.root_dir.glob("sa_*"))
+        files = []
+        for dir in data_dirs:
+            files.extend(list([f for f in list(dir.glob("sa_*"))]))
+        # Get a list of all the images
+        images = [f for f in files if f.name.endswith(".jpg")]
+
+        # Process into directory and filenames
+        directories = []
+        filenames = []
+        for img_fp in images:
+            dir, filename = self.__image_path_to_dir_and_file(img_fp)
+            directories.append(dir)
+            filenames.append(filename)
+
+        # Create a dataframe to concatenate
+        self.data = pd.concat(
+            [
+                self.data,
+                pd.DataFrame({"directory": directories, "filename": filenames}),
+            ]
+        )
+
+    def __process_links(
+        self, data_dir: Path, links: pd.DataFrame, num_samples: int
+    ) -> None:
+        # Iterate over the links and download the data
+        for _, link in links.iterrows():
+            # Break if we have enough samples
+            if len(self.data) >= num_samples:
+                break
+
+            url: str = link["cdn_link"]
+            filename: str = link["file_name"]
+            output_fp = data_dir / filename
+            # Only do the download + untar if the directory doesn't exist
+            untared_dir = output_fp.parent / output_fp.stem
+            if untared_dir.exists():
+                continue
+            logger.debug(
+                "Continuing download: %s / %s samples", len(self.data), num_samples
+            )
+            image_dir = self.__download_and_untar(url, output_fp)
+            # Remove the tar file
+            os.remove(output_fp)
+            # Get a list of all the files in the directory
+            files = list(image_dir.glob("*"))
+            # Get a list of all the images
+            images = [f for f in files if f.name.endswith(".jpg")]
+
+            # Process into directory and filenames
+            directories = []
+            filenames = []
+            for img_fp in images:
+                dir, filename = self.__image_path_to_dir_and_file(img_fp)
+                directories.append(dir)
+                filenames.append(filename)
+
+            # Create a dataframe to concatenate
+            self.data = pd.concat(
+                [
+                    self.data,
+                    pd.DataFrame({"directory": directories, "filename": filenames}),
+                ]
+            )
+
+    def __download_and_untar(self, url: str, archive_fp: Path) -> Path:
+        """Download a file from a URL and extract it to a directory. Returns the directory path."""
+        utils.download_file(url, archive_fp)
+
+        # Untar the file and delete the tar file
+        image_dir = archive_fp.parent / archive_fp.stem
+        logger.info(f"Extracting images from {archive_fp} to directory {image_dir}")
+        # Remove this image_dir if it already exists
+        if image_dir.exists():
+            shutil.rmtree(image_dir)
+        with tarfile.open(archive_fp) as tar:
+            tar.extractall(path=image_dir)
+        return image_dir

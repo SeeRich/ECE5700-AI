@@ -42,7 +42,7 @@ def download_file(url: str, fullpath: Path) -> None:
         )
 
         def reporthook(block_num: int, block_size: int, total_size: int) -> None:
-            progress.update(task, total=total_size, completed=block_num * block_size)
+            progress.update(task, total=total_size, completed=block_num * block_size, refresh=True)
 
         urllib.request.urlretrieve(url, fullpath, reporthook)
 

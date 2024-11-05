@@ -8,5 +8,6 @@ pandas
 pandas-stubs
 pyarrow
 timm
+pycocotools
 
 # https://pytorch.org/get-started/locally/
