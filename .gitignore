@@ -168,3 +168,4 @@ hw5/data/
 demo/rnn/data/
 project/data/
 project/weights/sam_vit_h_4b8939.pth
+project/weights/ece570_model_merged.pth
