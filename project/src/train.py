@@ -262,4 +262,6 @@ if __name__ == "__main__":
         # Save the student model checkpoint (just do this each epoch)
         checkpoint_path = f"data/weights/student_model_epoch_{epoch}.pth"
         logger.info("Saving student model checkpoint to %s", checkpoint_path)
+        sam_image_encoder.cpu()
         torch.save(sam_image_encoder.state_dict(), checkpoint_path)
+        sam_image_encoder.to(utils.get_device())
