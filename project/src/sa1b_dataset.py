@@ -54,22 +54,6 @@ class SA1BDataset(Dataset[T]):
         if cache_fp.exists():
             self.data = pd.read_parquet(cache_fp)
             logger.debug(f"Loaded cached data, num samples: {len(self.data)}")
-
-            # If we do have a cache file, load any embeddings present as well.
-            # This helps work around training that was interrupted.
-            has_embeddings: list[bool] = []
-            for _, row in self.data.iterrows():
-                directory = row["directory"]
-                image = row["filename"]
-                embedding_fp = self.embeddings_dir / directory / f"{image}.pth"
-                has_embeddings.append(embedding_fp.exists())
-            self.data["embedding"] = has_embeddings
-            num_missing_embeddings = self.data["embedding"].value_counts().get(False, 0)
-            if num_missing_embeddings > 0:
-                logger.warning(
-                    "Missing %d embeddings",
-                    num_missing_embeddings,
-                )
         else:
             self.__load_existing_data()
 
@@ -83,6 +67,22 @@ class SA1BDataset(Dataset[T]):
             self.__process_links(self.root_dir, links, num_samples)
             # Cache data frame to disk so we don't have to download it again
             self.data.to_parquet(cache_fp)
+
+        # Load any embeddings present as well.
+        # This helps work around training that was interrupted.
+        has_embeddings: list[bool] = []
+        for _, row in self.data.iterrows():
+            directory = row["directory"]
+            image = row["filename"]
+            embedding_fp = self.embeddings_dir / directory / f"{image}.pth"
+            has_embeddings.append(embedding_fp.exists())
+        self.data["embedding"] = has_embeddings
+        num_missing_embeddings = self.data["embedding"].value_counts().get(False, 0)
+        if num_missing_embeddings > 0:
+            logger.warning(
+                "Missing %d embeddings",
+                num_missing_embeddings,
+            )
 
         # Filter the list by the number of desired samples
         if len(self.data) < num_samples:
