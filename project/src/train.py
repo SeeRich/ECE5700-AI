@@ -236,7 +236,7 @@ if __name__ == "__main__":
     )
 
     # Train the student model for n_epochs
-    n_epochs = 4
+    n_epochs = 2
     start_time = datetime.now()
     optimizer = torch.optim.Adam(sam_image_encoder.parameters())
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
