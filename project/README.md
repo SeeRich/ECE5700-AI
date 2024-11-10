@@ -1,5 +1,6 @@
 # Course Project - Segment Anything
 * This course project will revolve around Segment Anything Model (v1/v2)
+* Anonymous GitHub link: https://anonymous.4open.science/r/ECE570-FINAL-D9EA/README.md
 
 ### Selected Papers:
 * [Mobile SAM Paper (arXiv 2023)](https://arxiv.org/pdf/2306.14289)
