@@ -34,9 +34,36 @@
 * Download checkpoint [file](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth)
 * Download SA-B1 dataset
 
-## TODO:
-* Write a script that will take a directory of images and:
-    1. Come up with ViT Tiny model (i.e. try using the one from pytorch or somewhere else already)
-    2. Generate embedding vector from image using existing Meta SAM model
-    3. Generate embedding vector from image using ViT Tiny
-    4. Measure MSE between embedding vector and feed that back to train ViT Tiny
+# ECE570-FINAL
+
+## Instructions and notable files:
+* Project Overview Python Notebook: **final_project.ipynb**
+    * This is the main code to run and showcase the trained model performance. However, keep in mind, if running on CPU backend, you will need at least 16 GB of RAM to run the original SAM model. Also keep in mind, the 2.6 GB pretrained weights may take a while to download for the original SAM model.
+* Short overview video: **ProjectOverview.mp4**
+* Model Training Code: **src/train.py**
+    * Note: the training code was run on a powerful Nvidia CUDA GPU for over 12 hours. This wasn\'t tested with any other Pytorch backends. An example command is provided at the top of the file for training on 220000 source images.
+* Python requirements: **frozen_requirements.txt**
+
+### Usage in Google Colab (preferred method)
+1. Download two files: **archive.zip** and **final_project.ipynb**
+2. Open the python notebook in Colab like usual (prefer GPU enabled runtime)
+3. Upload the archive.zip using the file upload button on the left hand side near the refresh directory button.
+4. Run the first cell which will detect the Colab environment and unzip the source archive.
+5. Continue running the cells as normal.
+
+### Usage on local machine (Linux/Mac tested):
+* It is advised to create a python virtual environment to avoid package version incompatibilities. This can be done with (Linux):
+```shell
+python -m venv ./venv
+source venv/bin/activate
+python -m pip install -U pip
+python -m pip install -r frozen_requirements.txt
+```
+
+### Generate archive.zip:
+```shell
+zip archive -@ < archive.txt
+# To test
+mkdir archive_unzipped
+unzip archive.zip -d archive_unzipped
+```
